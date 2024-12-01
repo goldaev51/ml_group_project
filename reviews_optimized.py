@@ -94,7 +94,8 @@ class SentimentClassifier(nn.Module):
         return output.logits
 
 model = SentimentClassifier(n_classes=2)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Використовується пристрій: {device}")
 model = model.to(device)
 
 # Збереження та завантаження моделі
