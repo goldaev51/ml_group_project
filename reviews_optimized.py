@@ -3,8 +3,7 @@ import torch
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.feature_extraction.text import TfidfVectorizer
-from imblearn.over_sampling import RandomOverSampler
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
 from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
@@ -25,7 +24,7 @@ def clean_text(text):
     text = text.replace('\\"', '"').replace('\\n', ' ')
     return text.lower()
 
-frac = 0.01
+frac = 0.05
 print(f"Вибір підмножини даних ({int(frac*100)}%)...")
 train_data = train_data.sample(frac=frac, random_state=42)
 test_data = test_data.sample(frac=frac, random_state=42)
@@ -76,15 +75,18 @@ class ReviewDataset(Dataset):
 print("Завантаження DistilBERT токенайзера...")
 tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 train_texts, val_texts, train_labels, val_labels = train_test_split(
-    X_train.tolist(), y_train.tolist(), test_size=0.1, random_state=42
+    X_train.tolist(), y_train.tolist(), test_size=0.2, random_state=42
 )
 
 train_dataset = ReviewDataset(train_texts, train_labels, tokenizer)
 val_dataset = ReviewDataset(val_texts, val_labels, tokenizer)
+test_dataset = ReviewDataset(X_test.tolist(), y_test.tolist(), tokenizer)
 
 print("Створення DataLoader...")
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=32)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=64)
+test_loader = DataLoader(test_dataset, batch_size=64)
+
 
 print("Ініціалізація моделі...")
 class SentimentClassifier(nn.Module):
@@ -116,12 +118,43 @@ def load_model(model, path):
     model.eval()
     print(f"Model loaded from {path}")
 
+def test_model(model, test_loader, device):
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+    loss_fn = nn.CrossEntropyLoss()
+    all_predictions = []
+    all_labels = []
+
+    with torch.no_grad():
+        for batch in test_loader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['label'].to(device)
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            loss = loss_fn(outputs, labels)
+            total_loss += loss.item()
+
+            predictions = torch.argmax(outputs, dim=1)
+            correct += (predictions == labels).sum().item()
+            total += labels.size(0)
+
+            all_predictions.extend(predictions.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+    accuracy = correct / total
+    print(f"Test Loss: {total_loss / len(test_loader):.4f}")
+    print(f"Test Accuracy: {accuracy:.4f}")
+    return all_predictions, all_labels
+
 choice = input("Enter 'train' to train the model or 'load' to load a pre-trained model: ").strip().lower()
 
 if choice == 'train':
     print("Розпочато тренування моделі...")
     start_time = time.time()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-5, weight_decay=0.01)
     loss_fn = nn.CrossEntropyLoss()
 
     best_loss = float('inf')
@@ -173,6 +206,9 @@ if choice == 'train':
         val_losses.append(val_loss)
         print(f"Validation Loss: {val_loss:.4f}")
 
+        end_epoch_time = time.time()
+        print(f"Епоха {epoch + 1} завершена за {end_epoch_time - start_epoch_time:.2f} секунд")
+
         if val_loss < best_loss:
             best_loss = val_loss
             trials = 0
@@ -183,10 +219,6 @@ if choice == 'train':
                 print("Early stopping triggered")
                 break
 
-        end_epoch_time = time.time()
-        print(f"Епоха {epoch + 1} завершена за {end_epoch_time - start_epoch_time:.2f} секунд")
-
-    # Побудова графіків
     print("Створення графіків втрат...")
     plt.figure(figsize=(10, 6))
     plt.plot(train_losses, label='Train Loss')
@@ -199,12 +231,25 @@ if choice == 'train':
     print("Графік збережено в папці reports.")
     end_time = time.time()
     print(f"Тренування завершено за {end_time - start_time:.2f} секунд")
+
+    print("Оцінка моделі на тестових даних...")
+    test_predictions, test_labels = test_model(model, test_loader, device)
+
+    # Матриця плутанини
+    cm = confusion_matrix(test_labels, test_predictions)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Negative", "Positive"])
+    disp.plot(cmap=plt.cm.Blues)
+    plt.title('Confusion Matrix - Test Data')
+    plt.savefig('reports/test_confusion_matrix.png')
+    print("Матриця плутанини для тестових даних збережена в папці reports.")
+
 elif choice == 'load':
     if os.path.exists(model_path):
         print("Завантаження навченої моделі...")
         load_model(model, model_path)
     else:
         print("Не знайдено навченої моделі. Спочатку виконайте тренування.")
+
 
 print("Запуск інтерфейсу для класифікації...")
 def classify_review(review):
@@ -216,3 +261,4 @@ def classify_review(review):
     return {"Negative": probs[0], "Positive": probs[1]}
 
 gr.Interface(fn=classify_review, inputs="text", outputs="label").launch()
+
