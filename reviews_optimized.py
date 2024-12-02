@@ -9,6 +9,12 @@ from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
 from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
 import gradio as gr
+import matplotlib.pyplot as plt
+import time
+
+# Створення папки для звітів
+if not os.path.exists("reports"):
+    os.makedirs("reports")
 
 # Логування завантаження даних
 print("Завантаження даних...")
@@ -114,6 +120,7 @@ choice = input("Enter 'train' to train the model or 'load' to load a pre-trained
 
 if choice == 'train':
     print("Розпочато тренування моделі...")
+    start_time = time.time()
     optimizer = torch.optim.AdamW(model.parameters(), lr=2e-5)
     loss_fn = nn.CrossEntropyLoss()
 
@@ -121,7 +128,11 @@ if choice == 'train':
     patience, trials = 2, 0
     print(f"Number of samples in train_loader: {len(train_dataset)}")
     print(f"Batch size: {train_loader.batch_size}")
+    train_losses = []
+    val_losses = []
+
     for epoch in range(5):
+        start_epoch_time = time.time()
         print(f"Епоха {epoch + 1}...")
         model.train()
         total_loss = 0
@@ -142,6 +153,7 @@ if choice == 'train':
                 print(f"Batch {batch_idx + 1}/{len(train_loader)} - Loss: {loss.item():.4f}")
 
         avg_loss = total_loss / len(train_loader)
+        train_losses.append(avg_loss)
         print(f"Середня втрата для епохи {epoch + 1}: {avg_loss:.4f}")
 
         print("Обчислення валідаційної втрати...")
@@ -158,6 +170,7 @@ if choice == 'train':
                 val_loss += loss.item()
 
         val_loss /= len(val_loader)
+        val_losses.append(val_loss)
         print(f"Validation Loss: {val_loss:.4f}")
 
         if val_loss < best_loss:
@@ -169,6 +182,23 @@ if choice == 'train':
             if trials >= patience:
                 print("Early stopping triggered")
                 break
+
+        end_epoch_time = time.time()
+        print(f"Епоха {epoch + 1} завершена за {end_epoch_time - start_epoch_time:.2f} секунд")
+
+    # Побудова графіків
+    print("Створення графіків втрат...")
+    plt.figure(figsize=(10, 6))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss')
+    plt.legend()
+    plt.savefig('reports/training_validation_loss.png')
+    print("Графік збережено в папці reports.")
+    end_time = time.time()
+    print(f"Тренування завершено за {end_time - start_time:.2f} секунд")
 elif choice == 'load':
     if os.path.exists(model_path):
         print("Завантаження навченої моделі...")
